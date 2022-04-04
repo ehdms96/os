@@ -43,6 +43,20 @@ sys_getpid(void)
 }
 
 int
+sys_yield(void)
+{
+  yield();
+  return 0;
+}
+
+int
+sys_preemption(void)
+{
+  preemption();
+  return 0;
+}
+
+int
 sys_sbrk(void)
 {
   int addr;
@@ -89,3 +103,22 @@ sys_uptime(void)
   release(&tickslock);
   return xticks;
 }
+
+int
+sys_getlev(void)
+{
+  return getlev();
+}
+
+int
+sys_setpriority(void)
+{
+  int pid, priority;
+  argint(0, &pid);
+  argint(1, &priority);
+
+
+  return setpriority(pid, priority);
+  //return 0;
+}
+

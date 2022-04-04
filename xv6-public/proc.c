@@ -88,6 +88,9 @@ allocproc(void)
 found:
   p->state = EMBRYO;
   p->pid = nextpid++;
+  p->myLev = 0;
+  p->myPriority = 0;
+  p->tick = 0;
 
   release(&ptable.lock);
 
@@ -326,30 +329,102 @@ scheduler(void)
   struct cpu *c = mycpu();
   c->proc = 0;
   
-  for(;;){
+  for(;;){  
     // Enable interrupts on this processor.
     sti();
 
     // Loop over process table looking for process to run.
     acquire(&ptable.lock);
+
+#ifdef MULTILEVEL_SCHED
     for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
       if(p->state != RUNNABLE)
         continue;
+               
+      if(p->pid % 2 == 0){
+        // Switch to chosen process.  It is the process's job
+        // to release ptable.lock and then reacquire it
+        // before jumping back to us.
+        c->proc = p;
+        switchuvm(p);
+        p->state = RUNNING;
 
-      // Switch to chosen process.  It is the process's job
-      // to release ptable.lock and then reacquire it
-      // before jumping back to us.
-      c->proc = p;
-      switchuvm(p);
-      p->state = RUNNING;
+        swtch(&(c->scheduler), p->context);
+        switchkvm();
 
-      swtch(&(c->scheduler), p->context);
+        p = ptable.proc;
+        // Process is done running for now.
+        // It should have changed its p->state before coming back.
+        c->proc = 0;        
+      }
+      else{
+        //-->fcfs
+        continue;
+      }
+    }
+
+    struct proc *firstProc = 0;
+    for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
+       if(p->state != RUNNABLE)
+         continue;
+
+       if(p->pid % 2 != 0){
+         
+         if(firstProc != 0){
+            if(p->pid < firstProc->pid)
+                firstProc = p;
+         }
+         else
+             firstProc = p;
+       }
+       else{
+         break;
+       }
+    }
+
+    if(firstProc != 0){
+      firstProc->tick = 0;
+      c->proc = firstProc;
+      switchuvm(firstProc);
+      firstProc->state = RUNNING;
+
+      swtch(&(c->scheduler), firstProc->context);
       switchkvm();
 
-      // Process is done running for now.
-      // It should have changed its p->state before coming back.
       c->proc = 0;
     }
+
+#elif MLFQ_SCHED
+    struct proc *firstProc = 0;
+      for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
+        if(p->state != RUNNABLE)
+          continue;
+
+        if(firstProc != 0){
+          if(firstProc->myPriority < p->myPriority)
+      	    firstProc = p;
+        }
+        else
+	  firstProc = p;
+      }
+
+      if(firstProc != 0){
+        c->proc = firstProc;
+        switchuvm(firstProc);
+        firstProc->state = RUNNING;
+	firstProc->tick = 0;
+        swtch(&(c->scheduler),firstProc->context);
+        switchkvm(); 
+        c->proc = 0;
+      }
+      else{
+	release(&ptable.lock);
+	boost();
+	acquire(&ptable.lock);
+      }
+               
+
+#endif
     release(&ptable.lock);
 
   }
@@ -389,6 +464,16 @@ yield(void)
   myproc()->state = RUNNABLE;
   sched();
   release(&ptable.lock);
+}
+
+void
+preemption(void)
+{
+  struct proc *p;
+  for(p=ptable.proc; p<&ptable.proc[NPROC]; p++){
+    if(p->state == RUNNABLE && p->pid % 2 == 0)
+        yield();
+  }
 }
 
 // A fork child's very first scheduling by scheduler()
@@ -493,7 +578,8 @@ kill(int pid)
     }
   }
   release(&ptable.lock);
-  return -1;
+  return -2;
+  //return -1;
 }
 
 //PAGEBREAK: 36
@@ -532,3 +618,91 @@ procdump(void)
     cprintf("\n");
   }
 }
+
+int
+getlev(void)
+{
+  return myproc()->myLev;
+}
+
+int setpriority(int pid, int priority){
+
+	//int giantParent = myproc()->parent->parent->parent->pid;
+	//int grandParent = myproc()->parent->parent->pid;
+	//int parent = myproc()->parent->pid;
+	//int myPid = myproc()->pid;
+	//cprintf("called pid : %d\n", pid);
+	//cprintf("my: %d, parent: %d, grand: %d, giant: %d\n", myPid, parent, grandParent, giantParent);
+
+	int check = 0;
+
+	struct proc *p;
+	acquire(&ptable.lock);
+	for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
+		//cprintf("pid : %d, p->pid : %d\n", pid, p->pid);
+		if(p->pid == pid){
+			if(p->parent->pid != myproc()->pid){
+				check = 1;
+				break;
+			}
+			else{
+				if(priority < 0 || priority > 10){
+					//cprintf("priority is 0 ~ 10, kill process : %d\n", check, pid);
+					p->killed = 1;
+				}
+				else{
+					p->myPriority = priority;
+					check = 2;
+					break;
+				}
+			}
+			break;
+		}
+	}
+	if(p == &ptable.proc[NPROC]) {check = 1;} //p->pid != pid, but not relation parent-child
+
+	release(&ptable.lock);
+
+	if(check == 1){
+		return -1;
+	}
+	else if(check == 2){
+		return 0;	
+	}
+	else{
+		return -2;
+	}
+	
+}
+
+void
+boost(void){
+  struct proc *p;
+
+  acquire(&ptable.lock);
+  for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
+    p->myLev = 0;
+    p->tick = 0;
+  }
+  release(&ptable.lock);
+}
+
+void
+priorCheck(struct proc *rp)
+{
+  struct proc *p;
+  int ch=0;
+  acquire(&ptable.lock);
+  for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
+    if(p->state != RUNNABLE)
+      continue;
+
+    if(rp->myPriority < p->myPriority){
+      ch=1;
+      break;
+    }
+  }
+  release(&ptable.lock);
+  if(ch == 1) yield();
+}
+
