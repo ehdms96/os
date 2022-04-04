@@ -13,7 +13,6 @@ struct gatedesc idt[256];
 extern uint vectors[];  // in vectors.S: array of 256 entry pointers
 struct spinlock tickslock;
 uint ticks;
-uint TICK = 0; //Global tick count
 
 void
 tvinit(void)
@@ -103,41 +102,11 @@ trap(struct trapframe *tf)
 
   // Force process to give up CPU on clock tick.
   // If interrupts were on while locks held, would need to check nlock.
-  if(myproc() && myproc()->state == RUNNING && tf->trapno == T_IRQ0+IRQ_TIMER){
-    
-#ifdef MULTILEVEL_SCHED
-    myproc()->tick++;
-    if(myproc()->pid % 2 != 0)
-      preemption();
-    else
-      yield();
-
-#elif MLFQ_SCHED
-    myproc()->tick++;
-    TICK++;
-    priorCheck();
-
-    if(TICK >= 100){
-      TICK = 0;
-      boost();
-    }
-
-    int timeQuantum = (2 * myproc()->myLev) + 4;
-
-
-    if(myproc()->tick >= timeQuantum){
-      myproc()->tick = 0;
-      myproc()->myLev++;
-      yield();
-    }
-
-    if(myproc()->myLev == MLFQ_K){
-      myproc()->myLev--;
-    }
-#endif
-  }
+  if(myproc() && myproc()->state == RUNNING &&
+     tf->trapno == T_IRQ0+IRQ_TIMER)
+    yield();
 
   // Check if the process has been killed since we yielded
   if(myproc() && myproc()->killed && (tf->cs&3) == DPL_USER)
-	exit();
+    exit();
 }

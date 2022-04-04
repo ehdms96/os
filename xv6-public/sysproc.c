@@ -89,26 +89,3 @@ sys_uptime(void)
   release(&tickslock);
   return xticks;
 }
-
-int
-sys_yield(void)
-{	
-	myproc()->myLev=0;
-	myproc()->tick=0;
-	yield();
-	return 0;
-}
-
-int
-sys_getlev(void)
-{
-	return getlev();
-}
-
-int sys_setpriority(void)
-{
-	int pid, priority;
-	argint(0, &pid);
-	argint(1, &priority);
-	return setpriority(pid, priority);
-}

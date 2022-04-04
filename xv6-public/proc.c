@@ -88,9 +88,7 @@ allocproc(void)
 found:
   p->state = EMBRYO;
   p->pid = nextpid++;
-  p->tick = 0;
-  p->myLev = 0;
-  p->myPriority = 0;
+
   release(&ptable.lock);
 
   // Allocate kernel stack.
@@ -334,8 +332,6 @@ scheduler(void)
 
     // Loop over process table looking for process to run.
     acquire(&ptable.lock);
-
-#ifdef MULTILEVEL_SCHED
     for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
       if(p->state != RUNNABLE)
         continue;
@@ -343,81 +339,19 @@ scheduler(void)
       // Switch to chosen process.  It is the process's job
       // to release ptable.lock and then reacquire it
       // before jumping back to us.
-      if(p->pid % 2 == 0){
-     	c->proc = p;
-     	switchuvm(p);
-      	p->state = RUNNING;
+      c->proc = p;
+      switchuvm(p);
+      p->state = RUNNING;
 
-      	swtch(&(c->scheduler), p->context);
-      	switchkvm();
-
-        // Process is done running for now.
-        // It should have changed its p->state before coming back.
-      	c->proc = 0;
-      }
-      else
-        //-->FCFS
-        continue;
-    }
-
-    //FCFS scheduler
-    struct proc *firstProc = 0;
-    for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
-      if(p->state != RUNNABLE)
-     	continue;
-
-      if(p->pid % 2 != 0){
-     	if(firstProc != 0){
-     	  if(p->pid < firstProc->pid)
-     	    firstProc = p;
-     	}
-     	else
-     	  firstProc = p;
-      }
-      else
-     	break;
-    }
-    if(firstProc != 0){
-      c->proc = firstProc;
-      switchuvm(firstProc);
-      firstProc->state = RUNNING;
-      firstProc->tick = 0;
-      swtch(&(c->scheduler), firstProc->context);
+      swtch(&(c->scheduler), p->context);
       switchkvm();
-      c->proc = 0;
-    }	 
 
-#elif MLFQ_SCHED
-    struct proc* firstProc = 0; //higher priority
-    for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
-      if(p->state != RUNNABLE)
-        continue;
-
-      if(firstProc != 0){
-        if(firstProc->myPriority < p->myPriority)
-          firstProc = p;
-      }
-      else
-        firstProc = p;
-    }
-
-    if(firstProc != 0){
-      c->proc = firstProc;
-      switchuvm(firstProc);
-      firstProc->state = RUNNING;
-      firstProc->tick = 0;
-      swtch(&(c->scheduler), firstProc->context);
-      switchkvm();
+      // Process is done running for now.
+      // It should have changed its p->state before coming back.
       c->proc = 0;
     }
-    else{
-      release(&ptable.lock);
-      boost();
-      acquire(&ptable.lock);
-    }
-
-#endif
     release(&ptable.lock);
+
   }
 }
 
@@ -457,14 +391,6 @@ yield(void)
   release(&ptable.lock);
 }
 
-void preemption(void){
-  struct proc* p;
-  for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
-    if(p->state == RUNNABLE && p->pid % 2 == 0)
-      yield();
-  }
-}
-
 // A fork child's very first scheduling by scheduler()
 // will swtch here.  "Return" to user space.
 void
@@ -500,7 +426,6 @@ sleep(void *chan, struct spinlock *lk)
     panic("sleep without lk");
 
   // Must acquire ptable.lock in order to
-  // change p->state and then call sched.
   // change p->state and then call sched.
   // Once we hold ptable.lock, we can be
   // guaranteed that we won't miss any wakeup
@@ -606,85 +531,4 @@ procdump(void)
     }
     cprintf("\n");
   }
-}
-
-int
-getlev(void)
-{
-  return myproc()->myLev;
-}
-
-int
-setpriority(int pid, int priority)
-{
-  int check = 0;
-
-  struct proc *p;
-  acquire(&ptable.lock);
-  for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
-    if(p->pid == pid){
-      if(p->parent->pid != myproc()->pid){
-        check = 1;
-        break;
-      }
-      else{
-        if(priority < 0 || priority > 10){
-          p->killed = 1;
-        }
-        else{
-          p->myPriority = priority;
-          check = 2;
-          break;
-        }
-      }
-      break;
-    }
-  }
-  
-  if(p == &ptable.proc[NPROC])
-    check = 1;
-
-  release(&ptable.lock);
-
-  if(check == 1)
-    return -1;
-  else if(check == 2)
-    return 0;
-  else
-    return -2;
-
-}
-
-void
-boost(void)
-{
-  struct proc *p;
-  acquire(&ptable.lock);
-  for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
-    p->tick = 0;
-    p->myLev = 0;
-  }
-  release(&ptable.lock);
-}
-
-void
-priorCheck(void)
-{
-  struct proc *p;
-  int ch=0;
-  acquire(&ptable.lock);
-  for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
-    if(p->state != RUNNABLE)
-      continue;
-
-    if(myproc()->myPriority < p->myPriority){
-      ch=1;
-      break;
-    }	
-  }
-
-  release(&ptable.lock);
-
-  if(ch == 1)
-    yield();
 }
